@@ -1,0 +1,82 @@
+diff --git a/src/http/ngx_http_core_module.c b/src/http/ngx_http_core_module.c
+index c57ec00..3d5bc8c 100644
+--- a/src/http/ngx_http_core_module.c
++++ b/src/http/ngx_http_core_module.c
+@@ -646,6 +646,13 @@ static ngx_command_t  ngx_http_core_commands[] = {
+       offsetof(ngx_http_core_loc_conf_t, etag),
+       NULL },
+ 
++    { ngx_string("proxy_100_continue"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
++      ngx_conf_set_flag_slot,
++      NGX_HTTP_LOC_CONF_OFFSET,
++      offsetof(ngx_http_core_loc_conf_t, proxy_100_continue),
++      NULL },
++
+     { ngx_string("error_page"),
+       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+                         |NGX_CONF_2MORE,
+@@ -3413,6 +3420,7 @@ ngx_http_core_create_loc_conf(ngx_conf_t *cf)
+     clcf->chunked_transfer_encoding = NGX_CONF_UNSET;
+     clcf->etag = NGX_CONF_UNSET;
+     clcf->server_tokens = NGX_CONF_UNSET_UINT;
++    clcf->proxy_100_continue = NGX_CONF_UNSET;
+     clcf->types_hash_max_size = NGX_CONF_UNSET_UINT;
+     clcf->types_hash_bucket_size = NGX_CONF_UNSET_UINT;
+ 
+@@ -3682,6 +3690,7 @@ ngx_http_core_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+     ngx_conf_merge_value(conf->chunked_transfer_encoding,
+                               prev->chunked_transfer_encoding, 1);
+     ngx_conf_merge_value(conf->etag, prev->etag, 1);
++    ngx_conf_merge_value(conf->proxy_100_continue, prev->proxy_100_continue, 0);
+ 
+     ngx_conf_merge_uint_value(conf->server_tokens, prev->server_tokens,
+                               NGX_HTTP_SERVER_TOKENS_ON);
+diff --git a/src/http/ngx_http_core_module.h b/src/http/ngx_http_core_module.h
+index 4c6da7c..43edfeb 100644
+--- a/src/http/ngx_http_core_module.h
++++ b/src/http/ngx_http_core_module.h
+@@ -396,6 +396,7 @@ struct ngx_http_core_loc_conf_s {
+     ngx_uint_t    server_tokens;           /* server_tokens */
+     ngx_flag_t    chunked_transfer_encoding; /* chunked_transfer_encoding */
+     ngx_flag_t    etag;                    /* etag */
++    ngx_flag_t    proxy_100_continue;      /* proxy_100_continue to upstream */
+ 
+ #if (NGX_HTTP_GZIP)
+     ngx_flag_t    gzip_vary;               /* gzip_vary */
+diff --git a/src/http/ngx_http_request_body.c b/src/http/ngx_http_request_body.c
+index c4f092e..735fa03 100644
+--- a/src/http/ngx_http_request_body.c
++++ b/src/http/ngx_http_request_body.c
+@@ -46,10 +46,18 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
+         return NGX_OK;
+     }
+ 
+-    if (ngx_http_test_expect(r) != NGX_OK) {
+-        rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
+-        goto done;
+-    }
++	clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
++
++	if (clcf->proxy_100_continue) {
++
++		r->expect_tested = 1;
++
++	} else {
++		if (ngx_http_test_expect(r) != NGX_OK) {
++			rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
++			goto done;
++		}
++	}
+ 
+     rb = ngx_pcalloc(r->pool, sizeof(ngx_http_request_body_t));
+     if (rb == NULL) {
+@@ -155,8 +163,6 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
+         goto done;
+     }
+ 
+-    clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+-
+     size = clcf->client_body_buffer_size;
+     size += size >> 2;
+ 
